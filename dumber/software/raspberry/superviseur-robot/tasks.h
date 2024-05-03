@@ -18,6 +18,7 @@
 #ifndef __TASKS_H__
 #define __TASKS_H__
 
+
 #include <unistd.h>
 #include <iostream>
 
@@ -76,6 +77,9 @@ private:
     RT_TASK th_openComRobot;
     RT_TASK th_startRobot;
     RT_TASK th_move;
+    RT_TASK th_battery;
+    RT_TASK th_sendImage;
+    RT_TASK th_startCamera;
     
     /**********************************************************************/
     /* Mutex                                                              */
@@ -84,6 +88,7 @@ private:
     RT_MUTEX mutex_robot;
     RT_MUTEX mutex_robotStarted;
     RT_MUTEX mutex_move;
+    RT_MUTEX mutex_camera;
 
     /**********************************************************************/
     /* Semaphores                                                         */
@@ -92,6 +97,7 @@ private:
     RT_SEM sem_openComRobot;
     RT_SEM sem_serverOk;
     RT_SEM sem_startRobot;
+    RT_SEM sem_cameraStarted;
 
     /**********************************************************************/
     /* Message queues                                                     */
@@ -148,6 +154,10 @@ private:
      * @return Message read
      */
     Message *ReadInQueue(RT_QUEUE *queue);
+    
+    void BatteryTask();
+    void StartCameraTask();
+    void SendImageTask();
 
 };
 
