@@ -18,7 +18,6 @@
 #ifndef __TASKS_H__
 #define __TASKS_H__
 
-
 #include <unistd.h>
 #include <iostream>
 
@@ -65,10 +64,15 @@ private:
     /**********************************************************************/
     ComMonitor monitor;
     ComRobot robot;
-    Camera camera = Camera(sm,10); //added (10 fps for 1 frame every 100ms)
+    Camera camera = Camera(sm,5);
     int robotStarted = 0;
     int move = MESSAGE_ROBOT_STOP;
-    bool cameraState = false;
+    int cameraStarted=0;
+    int wdStarted=0;
+    int findArena=0;
+    Arena arenaSaved;
+    int counter=0;
+    bool positionEnable=false;
     
     /**********************************************************************/
     /* Tasks                                                              */
@@ -80,11 +84,14 @@ private:
     RT_TASK th_startRobot;
     RT_TASK th_move;
     RT_TASK th_battery;
-    RT_TASK th_sendImage;
-    RT_TASK th_startCamera;
-    RT_TASK th_stopCamera;
-    RT_TASK th_calibrationArena;
-    
+    RT_TASK th_openCamera;
+    RT_TASK th_closeCamera;
+    RT_TASK th_grabImage;
+    RT_TASK th_start_watchdog;
+    RT_TASK th_reload_watchdog;
+    RT_TASK th_find_arena;
+    RT_TASK th_find_position;
+
     /**********************************************************************/
     /* Mutex                                                              */
     /**********************************************************************/
@@ -93,7 +100,9 @@ private:
     RT_MUTEX mutex_robotStarted;
     RT_MUTEX mutex_move;
     RT_MUTEX mutex_camera;
-    RT_MUTEX mutex_cameraState; //mutex for the protection of the state of the camera (open or close) thus stopping the instoppable flux of shitty pictures
+    RT_MUTEX mutex_watchdog;
+    RT_MUTEX mutex_arena;
+    RT_MUTEX mutex_counter;
 
     /**********************************************************************/
     /* Semaphores                                                         */
@@ -102,9 +111,13 @@ private:
     RT_SEM sem_openComRobot;
     RT_SEM sem_serverOk;
     RT_SEM sem_startRobot;
-    RT_SEM sem_startCamera; //added
-    RT_SEM sem_stopCamera; //added for when the camera is stoped
-    RT_SEM sem_calibTheThunderdome; //for when the calibration is needed
+    RT_SEM sem_startCamera;
+    RT_SEM sem_stopCamera;
+    RT_SEM sem_startWatchdog;
+    RT_SEM sem_reloadWatchdog;
+    RT_SEM sem_startArena;
+    RT_SEM sem_arenaFound;
+    RT_SEM sem_findRobot;
 
     /**********************************************************************/
     /* Message queues                                                     */
@@ -161,14 +174,19 @@ private:
      * @return Message read
      */
     Message *ReadInQueue(RT_QUEUE *queue);
-    
-    void BatteryTask();
-    void StartCameraTask();
-    void SendImageTask();
-    void StopCameraTask();
-    void CalibrationArenaTask();
+
+    void get_battery(void *arg);
+    void detect_comm_loss();
+    void open_camera();
+    void grab_image();
+    void close_camera();
+    void start_watchdog();
+    void reload_watchdog();
+    void find_arena();
+    void findRobot();
+    void Counter(Message * msg);
+
 
 };
 
 #endif // __TASKS_H__ 
-
