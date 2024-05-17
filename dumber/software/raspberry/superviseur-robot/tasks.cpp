@@ -85,6 +85,10 @@ void Tasks::Init() {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+    if (err = rt_mutex_create(&mutex_positionOn, NULL)) {
+        cerr << "Error mutex create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
 
     cout << "Mutexes created successfully" << endl << flush;
 
@@ -115,15 +119,15 @@ void Tasks::Init() {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-    if (err = rt_sem_create(&sem_capturingPict, NULL, 0, S_FIFO)) {
-        cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
-        exit(EXIT_FAILURE);
-    }
     if (err = rt_sem_create(&sem_calibTheThunderdome, NULL, 0, S_FIFO)) {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
     if (err = rt_sem_create(&sem_choosingArena, NULL, 0, S_FIFO)) {
+        cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_sem_create(&sem_fluxOn, NULL, 0, S_FIFO)) {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -236,6 +240,10 @@ void Tasks::Run() {
         cerr << "Error task start: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+    if (err = rt_task_start(&th_calibrationArena, (void(*)(void*)) & Tasks::CalibrationArenaTask, this)) {
+        cerr << "Error task start: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
 
     cout << "Tasks launched" << endl << flush;
 }
@@ -341,16 +349,28 @@ void Tasks::ReceiveFromMonTask(void *arg) {
             rt_sem_v(&sem_stopCamera); //Put semaphore to start the camera to 1 when the message is received
         } else if (msgRcv->CompareID(MESSAGE_CAM_ASK_ARENA)) {
             rt_sem_v(&sem_calibTheThunderdome);
+            
         } else if (msgRcv->CompareID(MESSAGE_CAM_ARENA_CONFIRM)) {
             rt_mutex_acquire(&mutex_arena, TM_INFINITE);//met arenaOK a 1 et respectivement a 0
             struct_arena.areneOK = true;
             rt_mutex_release(&mutex_arena);
             rt_sem_v(&sem_choosingArena);
+            
         } else if (msgRcv->CompareID(MESSAGE_CAM_ARENA_INFIRM)) {
             rt_mutex_acquire(&mutex_arena, TM_INFINITE);
             struct_arena.areneOK = false;
             rt_mutex_release(&mutex_arena);
-            rt_sem_v(&sem_choosingArena);   
+            rt_sem_v(&sem_choosingArena);  
+            
+        } else if (msgRcv->CompareID(MESSAGE_CAM_POSITION_COMPUTE_START)) {
+            rt_mutex_acquire(&mutex_positionOn, TM_INFINITE);
+            positionOn = true;
+            rt_mutex_release(&mutex_positionOn);
+        } else if (msgRcv->CompareID(MESSAGE_CAM_POSITION_COMPUTE_STOP)) {
+            rt_mutex_acquire(&mutex_positionOn, TM_INFINITE);
+            positionOn = false;
+            rt_mutex_release(&mutex_positionOn);
+            
         } else if (msgRcv->CompareID(MESSAGE_ROBOT_GO_FORWARD) ||
                 msgRcv->CompareID(MESSAGE_ROBOT_GO_BACKWARD) ||
                 msgRcv->CompareID(MESSAGE_ROBOT_GO_LEFT) ||
@@ -558,7 +578,7 @@ void Tasks::StartCameraTask(){
             cout << "Go fuck yourself with your motherfucking camera";
         } else {
             message_open_camera = new Message(MESSAGE_ANSWER_ACK);
-            rt_sem_v(&sem_capturingPict);
+            rt_sem_v(&sem_fluxOn);
             
             cout << "The camera has been open successfully man";
         }
@@ -577,39 +597,56 @@ void Tasks::SendImageTask(){
    
     Img * picture;
     MessageImg * message_image;
-    bool cameraEnabled;
-    
+    struct_arena_t struct_arena_damped;
+    bool positionEnabled;
+    std::list<Position> robotList;
 
     rt_task_set_periodic(NULL, TM_NOW, 100000000);
     
     
     
     while (1) {
-        rt_sem_p(&sem_capturingPict,TM_INFINITE);
+        rt_sem_p(&sem_fluxOn,TM_INFINITE);
  
         rt_task_wait_period(NULL); 
         
-        cout << "Taking a picture man";
-        
         rt_mutex_acquire(&mutex_camera, TM_INFINITE);
-        picture = new Img(camera.Grab());
+        struct_arena_damped = struct_arena; //pour proteger struct_arena (on copie totalement donc pas de pointeur), c'est trop lourd peut-être ?
         rt_mutex_release(&mutex_camera);
         
-        if(struct_arena.areneOK){
-            picture->DrawArena(struct_arena.thunderdome);
+        rt_mutex_acquire(&mutex_arena, TM_INFINITE);
+        picture = new Img(camera.Grab());
+        rt_mutex_release(&mutex_arena);
+        
+        rt_mutex_acquire(&mutex_positionOn, TM_INFINITE);
+        positionEnabled = positionOn;
+        rt_mutex_release(&mutex_positionOn);
+        
+        if(struct_arena_damped.areneOK){
+            picture->DrawArena(struct_arena_damped.thunderdome);
         }
         
+        
+        if(positionEnabled){ //on si la position des robots est enabled
+            robotList = picture->SearchRobot(struct_arena_damped.thunderdome);
+                if(!(robotList.empty())){
+                    int robotNum = picture->DrawAllRobots(robotList);
+                    cout << "Number of robots drawn : " << robotNum <<endl << flush;
+                }
+        }
+      
+        
         message_image = new MessageImg(MESSAGE_CAM_IMAGE, picture);
-        
-
-        
         WriteInQueue(&q_messageToMon, message_image);
 
         cout << "Taking a picture man" << endl << flush;
-        rt_sem_v(&sem_capturingPict);
+        rt_sem_v(&sem_fluxOn);
     }
 }
     
+
+
+
 
 void Tasks::StopCameraTask(){
     cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
@@ -619,7 +656,8 @@ void Tasks::StopCameraTask(){
     
     while(1){
         rt_sem_p(&sem_stopCamera,TM_INFINITE);
-        rt_sem_p(&sem_capturingPict,TM_INFINITE);
+        
+        rt_sem_p(&sem_fluxOn, TM_INFINITE);
         cout << "Stoping my big bad camera";
         cout << endl;
         
@@ -643,25 +681,29 @@ void Tasks::CalibrationArenaTask(){
     Message * Msg;
     
     while(1){
+        
         rt_sem_p(&sem_calibTheThunderdome,TM_INFINITE);
-        rt_sem_p(&sem_capturingPict, TM_INFINITE); //stop le flux incéssent de prise d'image a 10 fps par secondes
         
+        rt_sem_p(&sem_fluxOn, TM_INFINITE); //stop le flux incéssent de prise d'image a 10 fps par secondes
         
+        cout << "entree dans calib" << endl << flush;
         //choppe un image pour la validation de l'arene
         rt_mutex_acquire(&mutex_camera, TM_INFINITE);
         imageArene = new Img(camera.Grab());
         rt_mutex_release(&mutex_camera);
         
-        //cherche l'arene
-        rt_mutex_acquire(&mutex_arena, TM_INFINITE);
-        *ArenaFinded = imageArene->SearchArena();
-        rt_mutex_release(&mutex_arena);
+        cout << "entree dans calib 2" << endl << flush;
         
+        //cherche l'arene
+        ArenaFinded = new Arena(imageArene->SearchArena());
+        
+        cout << "arene cherché" << endl << flush;
         //Si pas d'arene, instancie l'arene
         if(ArenaFinded->IsEmpty()){
             cout << "Arena not finded" << endl << flush;
             Msg = new Message(MESSAGE_ANSWER_NACK);
             WriteInQueue(&q_messageToMon, Msg);
+            rt_sem_v(&sem_fluxOn); //start the camera again / image flux
         }
         else{
             cout << "Arena finded" << endl << flush;
@@ -675,16 +717,17 @@ void Tasks::CalibrationArenaTask(){
             if(struct_arena.areneOK){
                 cout << "Arena validated" << endl << flush;
                 struct_arena.thunderdome = *ArenaFinded;
-                rt_sem_v(&sem_capturingPict); //start the camera again / image flux
+                rt_sem_v(&sem_fluxOn); //start the camera again / image flux
             }
             else{
                 cout << "Arena not validated" << endl << flush;
-                rt_sem_v(&sem_capturingPict);
+                rt_sem_p(&sem_choosingArena, TM_INFINITE);
+                rt_sem_v(&sem_fluxOn); //start the camera again / image flux
             }
-        }     
+        }    
+        
     }
-    
-    
 }
+
 
 

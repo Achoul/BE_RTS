@@ -66,13 +66,13 @@ private:
     ComMonitor monitor;
     ComRobot robot;
     Camera camera = Camera(sm,10); //added (10 fps for 1 frame every 100ms)
-    struct {
+    struct struct_arena_t{
         Arena thunderdome;
         bool areneOK = false; //bool pour validation de l'arene
     }struct_arena;
     int robotStarted = 0;
     int move = MESSAGE_ROBOT_STOP;
-    bool fluxOn;
+    bool positionOn; //position robot enabled or not
     
     /**********************************************************************/
     /* Tasks                                                              */
@@ -98,6 +98,7 @@ private:
     RT_MUTEX mutex_move;
     RT_MUTEX mutex_camera;
     RT_MUTEX mutex_arena;
+    RT_MUTEX mutex_positionOn;
 
     /**********************************************************************/
     /* Semaphores                                                         */
@@ -108,9 +109,9 @@ private:
     RT_SEM sem_startRobot;
     RT_SEM sem_startCamera; //added
     RT_SEM sem_stopCamera; //added for when the camera is stoped
-    RT_SEM sem_capturingPict; //semaphore for finishing capturing a picture
     RT_SEM sem_calibTheThunderdome; //for when the calibration is needed
     RT_SEM sem_choosingArena; //for the selection of the arena
+    RT_SEM sem_fluxOn; //for stopping camera flux
 
     /**********************************************************************/
     /* Message queues                                                     */
@@ -173,6 +174,7 @@ private:
     void SendImageTask();
     void StopCameraTask();
     void CalibrationArenaTask();
+    void RobotPositionTask();
 
 };
 
