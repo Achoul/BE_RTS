@@ -27,9 +27,9 @@
 #define PRIORITY_TSTARTROBOT 20
 #define PRIORITY_TSTARTCAMERA 21
 #define PRIORITY_TSENDIMAGE 24
-#define PRIORITY_TSTOPCAMERA 26
+#define PRIORITY_TSTOPCAMERA 27
 #define PRIORITY_TBATTERY 23
-#define PRIORITY_TCALIBARENA 19
+#define PRIORITY_TCALIBARENA 26
 
 /*
  * Some remarks:
@@ -81,10 +81,11 @@ void Tasks::Init() {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-    if (err = rt_mutex_create(&mutex_cameraState, NULL)) {
+    if (err = rt_mutex_create(&mutex_arena, NULL)) {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+
     cout << "Mutexes created successfully" << endl << flush;
 
     /**************************************************************************************/
@@ -114,7 +115,15 @@ void Tasks::Init() {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+    if (err = rt_sem_create(&sem_capturingPict, NULL, 0, S_FIFO)) {
+        cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
     if (err = rt_sem_create(&sem_calibTheThunderdome, NULL, 0, S_FIFO)) {
+        cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_sem_create(&sem_choosingArena, NULL, 0, S_FIFO)) {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -331,7 +340,17 @@ void Tasks::ReceiveFromMonTask(void *arg) {
         } else if (msgRcv->CompareID(MESSAGE_CAM_CLOSE)) { 
             rt_sem_v(&sem_stopCamera); //Put semaphore to start the camera to 1 when the message is received
         } else if (msgRcv->CompareID(MESSAGE_CAM_ASK_ARENA)) {
-            rt_sem_v(&sem_calibTheThunderdome);     
+            rt_sem_v(&sem_calibTheThunderdome);
+        } else if (msgRcv->CompareID(MESSAGE_CAM_ARENA_CONFIRM)) {
+            rt_mutex_acquire(&mutex_arena, TM_INFINITE);//met arenaOK a 1 et respectivement a 0
+            struct_arena.areneOK = true;
+            rt_mutex_release(&mutex_arena);
+            rt_sem_v(&sem_choosingArena);
+        } else if (msgRcv->CompareID(MESSAGE_CAM_ARENA_INFIRM)) {
+            rt_mutex_acquire(&mutex_arena, TM_INFINITE);
+            struct_arena.areneOK = false;
+            rt_mutex_release(&mutex_arena);
+            rt_sem_v(&sem_choosingArena);   
         } else if (msgRcv->CompareID(MESSAGE_ROBOT_GO_FORWARD) ||
                 msgRcv->CompareID(MESSAGE_ROBOT_GO_BACKWARD) ||
                 msgRcv->CompareID(MESSAGE_ROBOT_GO_LEFT) ||
@@ -539,9 +558,7 @@ void Tasks::StartCameraTask(){
             cout << "Go fuck yourself with your motherfucking camera";
         } else {
             message_open_camera = new Message(MESSAGE_ANSWER_ACK);
-            rt_mutex_acquire(&mutex_cameraState, TM_INFINITE);
-            cameraState = true;
-            rt_mutex_release(&mutex_cameraState); 
+            rt_sem_v(&sem_capturingPict);
             
             cout << "The camera has been open successfully man";
         }
@@ -568,27 +585,28 @@ void Tasks::SendImageTask(){
     
     
     while (1) {
+        rt_sem_p(&sem_capturingPict,TM_INFINITE);
+ 
         rt_task_wait_period(NULL); 
-        //un peu à chier, pourquoi ça ne marche pas avec un semaphore?
-        cameraEnabled = cameraState; 
         
+        cout << "Taking a picture man";
         
-        if (cameraEnabled){
-            
+        rt_mutex_acquire(&mutex_camera, TM_INFINITE);
+        picture = new Img(camera.Grab());
+        rt_mutex_release(&mutex_camera);
         
-            cout << "Taking a picture man";
-        
-            rt_mutex_acquire(&mutex_camera, TM_INFINITE);
-            picture = new Img(camera.Grab());
-            rt_mutex_release(&mutex_camera);
-        
-            message_image = new MessageImg(MESSAGE_CAM_IMAGE, picture);
-        
-            WriteInQueue(&q_messageToMon, message_image);
-
-            cout << "Taking a picture man" << endl << flush;
-        
+        if(struct_arena.areneOK){
+            picture->DrawArena(struct_arena.thunderdome);
         }
+        
+        message_image = new MessageImg(MESSAGE_CAM_IMAGE, picture);
+        
+
+        
+        WriteInQueue(&q_messageToMon, message_image);
+
+        cout << "Taking a picture man" << endl << flush;
+        rt_sem_v(&sem_capturingPict);
     }
 }
     
@@ -601,16 +619,13 @@ void Tasks::StopCameraTask(){
     
     while(1){
         rt_sem_p(&sem_stopCamera,TM_INFINITE);
+        rt_sem_p(&sem_capturingPict,TM_INFINITE);
         cout << "Stoping my big bad camera";
         cout << endl;
         
         rt_mutex_acquire(&mutex_camera, TM_INFINITE);
         camera.Close();
         rt_mutex_release(&mutex_camera);  
-        
-        rt_mutex_acquire(&mutex_cameraState, TM_INFINITE);
-        cameraState = false;
-        rt_mutex_release(&mutex_cameraState);  
         
 
     }
@@ -621,8 +636,52 @@ void Tasks::CalibrationArenaTask(){
     // Synchronization barrier (waiting that all tasks are starting)
     rt_sem_p(&sem_barrier, TM_INFINITE);
     
+    //struct_arena * struct_arena_ptr;
+    Arena * ArenaFinded;
+    Img * imageArene;
+    MessageImg * message_image;
+    Message * Msg;
+    
     while(1){
-        rt_sem_p(&sem_stopCamera,TM_INFINITE);
+        rt_sem_p(&sem_calibTheThunderdome,TM_INFINITE);
+        rt_sem_p(&sem_capturingPict, TM_INFINITE); //stop le flux incéssent de prise d'image a 10 fps par secondes
+        
+        
+        //choppe un image pour la validation de l'arene
+        rt_mutex_acquire(&mutex_camera, TM_INFINITE);
+        imageArene = new Img(camera.Grab());
+        rt_mutex_release(&mutex_camera);
+        
+        //cherche l'arene
+        rt_mutex_acquire(&mutex_arena, TM_INFINITE);
+        *ArenaFinded = imageArene->SearchArena();
+        rt_mutex_release(&mutex_arena);
+        
+        //Si pas d'arene, instancie l'arene
+        if(ArenaFinded->IsEmpty()){
+            cout << "Arena not finded" << endl << flush;
+            Msg = new Message(MESSAGE_ANSWER_NACK);
+            WriteInQueue(&q_messageToMon, Msg);
+        }
+        else{
+            cout << "Arena finded" << endl << flush;
+            //dessine l'arene pour l'utilisateur
+            imageArene->DrawArena(*ArenaFinded);
+            message_image = new MessageImg(MESSAGE_CAM_IMAGE, imageArene);
+            WriteInQueue(&q_messageToMon, message_image);
+        
+            rt_sem_p(&sem_choosingArena, TM_INFINITE); // attend le choix de l'arene
+            
+            if(struct_arena.areneOK){
+                cout << "Arena validated" << endl << flush;
+                struct_arena.thunderdome = *ArenaFinded;
+                rt_sem_v(&sem_capturingPict); //start the camera again / image flux
+            }
+            else{
+                cout << "Arena not validated" << endl << flush;
+                rt_sem_v(&sem_capturingPict);
+            }
+        }     
     }
     
     

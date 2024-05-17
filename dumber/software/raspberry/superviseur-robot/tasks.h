@@ -66,9 +66,13 @@ private:
     ComMonitor monitor;
     ComRobot robot;
     Camera camera = Camera(sm,10); //added (10 fps for 1 frame every 100ms)
+    struct {
+        Arena thunderdome;
+        bool areneOK = false; //bool pour validation de l'arene
+    }struct_arena;
     int robotStarted = 0;
     int move = MESSAGE_ROBOT_STOP;
-    bool cameraState = false;
+    bool fluxOn;
     
     /**********************************************************************/
     /* Tasks                                                              */
@@ -93,7 +97,7 @@ private:
     RT_MUTEX mutex_robotStarted;
     RT_MUTEX mutex_move;
     RT_MUTEX mutex_camera;
-    RT_MUTEX mutex_cameraState; //mutex for the protection of the state of the camera (open or close) thus stopping the instoppable flux of shitty pictures
+    RT_MUTEX mutex_arena;
 
     /**********************************************************************/
     /* Semaphores                                                         */
@@ -104,7 +108,9 @@ private:
     RT_SEM sem_startRobot;
     RT_SEM sem_startCamera; //added
     RT_SEM sem_stopCamera; //added for when the camera is stoped
+    RT_SEM sem_capturingPict; //semaphore for finishing capturing a picture
     RT_SEM sem_calibTheThunderdome; //for when the calibration is needed
+    RT_SEM sem_choosingArena; //for the selection of the arena
 
     /**********************************************************************/
     /* Message queues                                                     */
