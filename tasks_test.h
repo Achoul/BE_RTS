@@ -64,15 +64,15 @@ private:
     /**********************************************************************/
     ComMonitor monitor;
     ComRobot robot;
-    Camera camera = Camera(sm,5);
+    Camera* camera;
+    Arena arena;
     int robotStarted = 0;
     int move = MESSAGE_ROBOT_STOP;
-    int cameraStarted=0;
-    int wdStarted=0;
-    int findArena=0;
-    Arena arenaSaved;
-    int counter=0;
-    bool positionEnable=false;
+    int errorCount = 0;
+    int watchdog;
+    int fluxCamera = 0;
+    int arenaFound=0; 
+    int position=0;  
     
     /**********************************************************************/
     /* Tasks                                                              */
@@ -84,14 +84,9 @@ private:
     RT_TASK th_startRobot;
     RT_TASK th_move;
     RT_TASK th_battery;
-    RT_TASK th_openCamera;
-    RT_TASK th_closeCamera;
-    RT_TASK th_grabImage;
-    RT_TASK th_start_watchdog;
-    RT_TASK th_reload_watchdog;
-    RT_TASK th_find_arena;
-    RT_TASK th_find_position;
-
+    RT_TASK th_watchdog;
+    RT_TASK th_camera;
+    
     /**********************************************************************/
     /* Mutex                                                              */
     /**********************************************************************/
@@ -99,10 +94,9 @@ private:
     RT_MUTEX mutex_robot;
     RT_MUTEX mutex_robotStarted;
     RT_MUTEX mutex_move;
+    RT_MUTEX mutex_errorCount;
     RT_MUTEX mutex_camera;
-    RT_MUTEX mutex_watchdog;
-    RT_MUTEX mutex_arena;
-    RT_MUTEX mutex_counter;
+    RT_MUTEX mutex_fluxCamera;
 
     /**********************************************************************/
     /* Semaphores                                                         */
@@ -111,13 +105,8 @@ private:
     RT_SEM sem_openComRobot;
     RT_SEM sem_serverOk;
     RT_SEM sem_startRobot;
-    RT_SEM sem_startCamera;
-    RT_SEM sem_stopCamera;
-    RT_SEM sem_startWatchdog;
-    RT_SEM sem_reloadWatchdog;
-    RT_SEM sem_startArena;
-    RT_SEM sem_arenaFound;
-    RT_SEM sem_findRobot;
+    RT_SEM sem_watchdog;
+    RT_SEM sem_battery;
 
     /**********************************************************************/
     /* Message queues                                                     */
@@ -175,18 +164,45 @@ private:
      */
     Message *ReadInQueue(RT_QUEUE *queue);
 
-    void get_battery(void *arg);
-    void detect_comm_loss();
-    void open_camera();
-    void grab_image();
-    void close_camera();
-    void start_watchdog();
-    void reload_watchdog();
-    void find_arena();
-    void findRobot();
-    void Counter(Message * msg);
+    /**
+     * Get the battery level from the robot and send it to the monitor
+     */
+    void Battery();
 
+    /**
+     * Communicate with the robot the watchdog
+     */
+    void Watchdog();
 
+    /*
+     * Count the number of error occured
+     */
+    void ErrorCounter(Message* msg);
+
+    /**
+     * Open the camera 
+     */
+    void OpenCamera();
+
+    /**
+     * Close the camera 
+     */
+    void CloseCamera();
+
+    /**
+     * Camera 
+     */
+    void CameraFlux();
+
+    /**
+     * Get arena size
+     */
+    void GetArena();
+
+    /**
+     * 
+     */
+    void PositionRobot(Img* image);
 };
 
 #endif // __TASKS_H__ 

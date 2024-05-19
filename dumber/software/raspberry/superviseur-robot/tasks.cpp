@@ -19,17 +19,19 @@
 #include <stdexcept>
 
 // Déclaration des priorités des taches
-#define PRIORITY_TSERVER 30
-#define PRIORITY_TOPENCOMROBOT 20
-#define PRIORITY_TMOVE 20
-#define PRIORITY_TSENDTOMON 22
-#define PRIORITY_TRECEIVEFROMMON 25
-#define PRIORITY_TSTARTROBOT 20
-#define PRIORITY_TSTARTCAMERA 21
-#define PRIORITY_TSENDIMAGE 24
-#define PRIORITY_TSTOPCAMERA 27
-#define PRIORITY_TBATTERY 23
-#define PRIORITY_TCALIBARENA 26
+#define PRIORITY_TSERVER 40
+#define PRIORITY_TOPENCOMROBOT 39
+#define PRIORITY_TMOVE 32
+#define PRIORITY_TSENDTOMON 38
+#define PRIORITY_TRECEIVEFROMMON 37
+
+#define PRIORITY_TSTARTROBOT 30
+#define PRIORITY_TSTARTCAMERA 36
+#define PRIORITY_TSENDIMAGE 28
+#define PRIORITY_TSTOPCAMERA 31
+#define PRIORITY_TBATTERY 20
+#define PRIORITY_TCALIBARENA 33
+#define PRIORITY_TROBOTPOSITION 27
 
 /*
  * Some remarks:
@@ -85,7 +87,15 @@ void Tasks::Init() {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-    if (err = rt_mutex_create(&mutex_positionOn, NULL)) {
+    if (err = rt_mutex_create(&mutex_currentImage, NULL)) {
+        cerr << "Error mutex create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_mutex_create(&mutex_validArene, NULL)) {
+        cerr << "Error mutex create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_mutex_create(&mutex_positionRobotEnabled, NULL)) {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -128,6 +138,10 @@ void Tasks::Init() {
         exit(EXIT_FAILURE);
     }
     if (err = rt_sem_create(&sem_fluxOn, NULL, 0, S_FIFO)) {
+        cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_sem_create(&sem_positionRobotOn, NULL, 0, S_FIFO)) {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -176,7 +190,11 @@ void Tasks::Init() {
         cerr << "Error task create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-    if (err = rt_task_create(&th_calibrationArena, "th_calibrationArena", 0, PRIORITY_TSTOPCAMERA, 0)) {
+    if (err = rt_task_create(&th_calibrationArena, "th_calibrationArena", 0, PRIORITY_TCALIBARENA, 0)) {
+        cerr << "Error task create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_task_create(&th_robotPosition, "th_robotPosition", 0, PRIORITY_TROBOTPOSITION, 0)) {
         cerr << "Error task create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -241,6 +259,10 @@ void Tasks::Run() {
         exit(EXIT_FAILURE);
     }
     if (err = rt_task_start(&th_calibrationArena, (void(*)(void*)) & Tasks::CalibrationArenaTask, this)) {
+        cerr << "Error task start: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_task_start(&th_robotPosition, (void(*)(void*)) & Tasks::RobotPositionTask, this)) {
         cerr << "Error task start: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -351,25 +373,29 @@ void Tasks::ReceiveFromMonTask(void *arg) {
             rt_sem_v(&sem_calibTheThunderdome);
             
         } else if (msgRcv->CompareID(MESSAGE_CAM_ARENA_CONFIRM)) {
-            rt_mutex_acquire(&mutex_arena, TM_INFINITE);//met arenaOK a 1 et respectivement a 0
-            struct_arena.areneOK = true;
-            rt_mutex_release(&mutex_arena);
+            rt_mutex_acquire(&mutex_validArene, TM_INFINITE);//met validArene a 1 et respectivement a 0
+            validArene = true;
+            rt_mutex_release(&mutex_validArene);
             rt_sem_v(&sem_choosingArena);
             
         } else if (msgRcv->CompareID(MESSAGE_CAM_ARENA_INFIRM)) {
-            rt_mutex_acquire(&mutex_arena, TM_INFINITE);
-            struct_arena.areneOK = false;
-            rt_mutex_release(&mutex_arena);
+            rt_mutex_acquire(&mutex_validArene, TM_INFINITE);//met validArene a 1 et respectivement a 0
+            validArene = false;
+            rt_mutex_release(&mutex_validArene);
             rt_sem_v(&sem_choosingArena);  
             
         } else if (msgRcv->CompareID(MESSAGE_CAM_POSITION_COMPUTE_START)) {
-            rt_mutex_acquire(&mutex_positionOn, TM_INFINITE);
-            positionOn = true;
-            rt_mutex_release(&mutex_positionOn);
+            rt_mutex_acquire(&mutex_positionRobotEnabled, TM_INFINITE);
+            positionRobotEnabled = true;
+            rt_mutex_release(&mutex_positionRobotEnabled);
+            rt_sem_v(&sem_positionRobotOn);
+
         } else if (msgRcv->CompareID(MESSAGE_CAM_POSITION_COMPUTE_STOP)) {
-            rt_mutex_acquire(&mutex_positionOn, TM_INFINITE);
-            positionOn = false;
-            rt_mutex_release(&mutex_positionOn);
+            rt_mutex_acquire(&mutex_positionRobotEnabled, TM_INFINITE);
+            positionRobotEnabled = false;
+            rt_mutex_release(&mutex_positionRobotEnabled);
+            rt_sem_p(&sem_positionRobotOn, TM_INFINITE);
+
             
         } else if (msgRcv->CompareID(MESSAGE_ROBOT_GO_FORWARD) ||
                 msgRcv->CompareID(MESSAGE_ROBOT_GO_BACKWARD) ||
@@ -569,7 +595,8 @@ void Tasks::StartCameraTask(){
         cout << endl;
         
         rt_mutex_acquire(&mutex_camera, TM_INFINITE);
-        int status = camera.Open();
+        int status = camera_struct.camera.Open();
+        camera_struct.cameraEnabled=true;
         rt_mutex_release(&mutex_camera);  
        
         
@@ -595,11 +622,9 @@ void Tasks::SendImageTask(){
     // Synchronization barrier (waiting that all tasks are starting)
     rt_sem_p(&sem_barrier, TM_INFINITE);
    
-    Img * picture;
     MessageImg * message_image;
-    struct_arena_t struct_arena_damped;
-    bool positionEnabled;
-    std::list<Position> robotList;
+    bool cameraOn;
+    bool positionEnabled_dummy;
 
     rt_task_set_periodic(NULL, TM_NOW, 100000000);
     
@@ -610,34 +635,47 @@ void Tasks::SendImageTask(){
  
         rt_task_wait_period(NULL); 
         
+        
         rt_mutex_acquire(&mutex_camera, TM_INFINITE);
-        struct_arena_damped = struct_arena; //pour proteger struct_arena (on copie totalement donc pas de pointeur), c'est trop lourd peut-être ?
+        cameraOn = camera_struct.cameraEnabled;
         rt_mutex_release(&mutex_camera);
         
-        rt_mutex_acquire(&mutex_arena, TM_INFINITE);
-        picture = new Img(camera.Grab());
-        rt_mutex_release(&mutex_arena);
-        
-        rt_mutex_acquire(&mutex_positionOn, TM_INFINITE);
-        positionEnabled = positionOn;
-        rt_mutex_release(&mutex_positionOn);
-        
-        if(struct_arena_damped.areneOK){
-            picture->DrawArena(struct_arena_damped.thunderdome);
+        if(cameraOn){
+            rt_mutex_acquire(&mutex_currentImage, TM_INFINITE); //attention c'est risque
+            currentImage = new Img(camera_struct.camera.Grab());
+            rt_mutex_release(&mutex_currentImage);    
         }
+
         
-        
-        if(positionEnabled){ //on si la position des robots est enabled
-            robotList = picture->SearchRobot(struct_arena_damped.thunderdome);
-                if(!(robotList.empty())){
-                    int robotNum = picture->DrawAllRobots(robotList);
-                    cout << "Number of robots drawn : " << robotNum <<endl << flush;
-                }
+        if(cameraOn){
+            rt_mutex_acquire(&mutex_arena, TM_INFINITE);
+            if(struct_arena.areneOK){
+                rt_mutex_acquire(&mutex_currentImage, TM_INFINITE);
+                currentImage->DrawArena(struct_arena.thunderdome);
+                rt_mutex_release(&mutex_currentImage);
+                cout << "drawing arena" << endl << flush;
+            }
+            else{
+               cout << "not drawing arena" << endl << flush; 
+            }
+            rt_mutex_release(&mutex_arena);
+            
+            rt_mutex_acquire(&mutex_positionRobotEnabled, TM_INFINITE);
+            positionEnabled_dummy = positionRobotEnabled;
+            rt_mutex_release(&mutex_positionRobotEnabled);
+            
+            if(positionEnabled_dummy){
+                rt_sem_p(&sem_positionTreatment,TM_INFINITE); //attend que la tâche qui dessine la position ai finie
+            }
+            
+
+            rt_mutex_acquire(&mutex_currentImage, TM_INFINITE);
+            message_image = new MessageImg(MESSAGE_CAM_IMAGE, currentImage);
+            rt_mutex_release(&mutex_currentImage);
+
+
+            WriteInQueue(&q_messageToMon, message_image);// a voir si on laisse l'envoie dans le mutex
         }
-      
-        
-        message_image = new MessageImg(MESSAGE_CAM_IMAGE, picture);
-        WriteInQueue(&q_messageToMon, message_image);
 
         cout << "Taking a picture man" << endl << flush;
         rt_sem_v(&sem_fluxOn);
@@ -655,14 +693,17 @@ void Tasks::StopCameraTask(){
     
     
     while(1){
+        
         rt_sem_p(&sem_stopCamera,TM_INFINITE);
         
         rt_sem_p(&sem_fluxOn, TM_INFINITE);
+        
         cout << "Stoping my big bad camera";
         cout << endl;
         
         rt_mutex_acquire(&mutex_camera, TM_INFINITE);
-        camera.Close();
+        camera_struct.camera.Close();
+        camera_struct.cameraEnabled=false;
         rt_mutex_release(&mutex_camera);  
         
 
@@ -679,6 +720,7 @@ void Tasks::CalibrationArenaTask(){
     Img * imageArene;
     MessageImg * message_image;
     Message * Msg;
+    bool validArene_dummy;
     
     while(1){
         
@@ -689,24 +731,29 @@ void Tasks::CalibrationArenaTask(){
         cout << "entree dans calib" << endl << flush;
         //choppe un image pour la validation de l'arene
         rt_mutex_acquire(&mutex_camera, TM_INFINITE);
-        imageArene = new Img(camera.Grab());
+        imageArene = new Img(camera_struct.camera.Grab());
         rt_mutex_release(&mutex_camera);
         
-        cout << "entree dans calib 2" << endl << flush;
+
         
         //cherche l'arene
         ArenaFinded = new Arena(imageArene->SearchArena());
         
-        cout << "arene cherché" << endl << flush;
+        cout << "arene cherché" << endl;
         //Si pas d'arene, instancie l'arene
         if(ArenaFinded->IsEmpty()){
-            cout << "Arena not finded" << endl << flush;
+            cout << "Arena not finded" << endl;
             Msg = new Message(MESSAGE_ANSWER_NACK);
             WriteInQueue(&q_messageToMon, Msg);
-            rt_sem_v(&sem_fluxOn); //start the camera again / image flux
+            
+            rt_mutex_acquire(&mutex_arena, TM_INFINITE);
+            struct_arena.areneOK = false;
+            rt_mutex_release(&mutex_arena);
+            
+            
         }
         else{
-            cout << "Arena finded" << endl << flush;
+            cout << "Arena finded" << endl;
             //dessine l'arene pour l'utilisateur
             imageArene->DrawArena(*ArenaFinded);
             message_image = new MessageImg(MESSAGE_CAM_IMAGE, imageArene);
@@ -714,20 +761,102 @@ void Tasks::CalibrationArenaTask(){
         
             rt_sem_p(&sem_choosingArena, TM_INFINITE); // attend le choix de l'arene
             
-            if(struct_arena.areneOK){
+            rt_mutex_acquire(&mutex_validArene, TM_INFINITE);
+            validArene_dummy = validArene;
+            rt_mutex_release(&mutex_validArene);
+            
+            if(validArene_dummy){
                 cout << "Arena validated" << endl << flush;
+                rt_mutex_acquire(&mutex_arena, TM_INFINITE);
                 struct_arena.thunderdome = *ArenaFinded;
-                rt_sem_v(&sem_fluxOn); //start the camera again / image flux
+                rt_mutex_release(&mutex_arena);
+                
+                rt_mutex_acquire(&mutex_arena, TM_INFINITE);
+                struct_arena.areneOK = true;
+                rt_mutex_release(&mutex_arena);
+
             }
             else{
                 cout << "Arena not validated" << endl << flush;
-                rt_sem_p(&sem_choosingArena, TM_INFINITE);
-                rt_sem_v(&sem_fluxOn); //start the camera again / image flux
+                
+                rt_mutex_acquire(&mutex_arena, TM_INFINITE);
+                struct_arena.areneOK = false;
+                rt_mutex_release(&mutex_arena);
             }
-        }    
+        }  
+    cout << "flux on" << endl << flush;
+    rt_sem_v(&sem_fluxOn); //start the camera again / image flux
         
     }
 }
 
+void Tasks::RobotPositionTask(){
+    
+    
+    cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
+    // Synchronization barrier (waiting that all tasks are starting)
+    rt_sem_p(&sem_barrier, TM_INFINITE);
+    
+    bool positionEnabled_dummy;
+    std::list<Position> robotList;
+    struct_arena_t struct_arena_dummy;
+    camera_struct_t camera_struct_dummy;
+    MessagePosition * Msg2Send;
+    
+    rt_task_set_periodic(NULL, TM_NOW, 100000000);
+    
+    
+    while(1){
+        
+        rt_task_wait_period(NULL);
+        rt_sem_p(&sem_positionRobotOn, TM_INFINITE);
+        rt_sem_p(&sem_fluxOn, TM_INFINITE);
+        cout << "Drawing robots" <<endl << flush;
+        
+        rt_mutex_acquire(&mutex_arena, TM_INFINITE);
+        struct_arena_dummy = struct_arena; //pour proteger struct_arena (on copie totalement donc pas de pointeur), c'est trop lourd peut-être ?
+        rt_mutex_release(&mutex_arena);
+        
+        rt_mutex_acquire(&mutex_camera, TM_INFINITE);
+        camera_struct_dummy = camera_struct; //pour proteger camera enanbled, important ici sinon ça dessine sur des image qui n'existent pas ==> erreur
+        rt_mutex_release(&mutex_camera);
+        
+        rt_mutex_acquire(&mutex_positionRobotEnabled, TM_INFINITE);
+        positionEnabled_dummy = positionRobotEnabled;
+        rt_mutex_release(&mutex_positionRobotEnabled);
+        
+        
+        if(positionEnabled_dummy && camera_struct_dummy.cameraEnabled){ //on si la position des robots est enabled
+            rt_mutex_acquire(&mutex_currentImage, TM_INFINITE);
+            robotList = currentImage->SearchRobot(struct_arena_dummy.thunderdome);
+            rt_mutex_release(&mutex_currentImage);
+            
+                if(!(robotList.empty())){
+                    rt_mutex_acquire(&mutex_currentImage, TM_INFINITE);
+                    int robotNum = currentImage->DrawRobots(robotList);
+                    cout << "drawing"<<endl << flush;
+                    rt_mutex_release(&mutex_currentImage);
+                    
+                    cout << "Number of robots drawn : " << robotNum <<endl << flush;
+                    
+                        Msg2Send = new MessagePosition(MESSAGE_CAM_POSITION, robotList.front());
+                        WriteInQueue(&q_messageToMon, Msg2Send);   
+                    
+                }
+                else{
+                    cout << "No robot in sight"<<endl << flush;
+                }
+            
+                rt_sem_v(&sem_positionTreatment);
+            
+        }
+        else{
+            
+        }
+        rt_sem_v(&sem_fluxOn);
+        rt_sem_v(&sem_positionRobotOn);
+        
+    }
 
+}
 

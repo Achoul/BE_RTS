@@ -65,14 +65,22 @@ private:
     /**********************************************************************/
     ComMonitor monitor;
     ComRobot robot;
-    Camera camera = Camera(sm,10); //added (10 fps for 1 frame every 100ms)
+    
+    struct camera_struct_t{
+        Camera camera = Camera(sm,10); //added (10 fps for 1 frame every 100ms)
+        bool cameraEnabled = false; //for task draw on picture
+    }camera_struct;
+    
+    Img * currentImage;
+    
     struct struct_arena_t{
         Arena thunderdome;
-        bool areneOK = false; //bool pour validation de l'arene
+        bool areneOK = false; //bool pour arène valide et existante
     }struct_arena;
     int robotStarted = 0;
     int move = MESSAGE_ROBOT_STOP;
-    bool positionOn; //position robot enabled or not
+    bool validArene = false;
+    bool positionRobotEnabled;
     
     /**********************************************************************/
     /* Tasks                                                              */
@@ -88,6 +96,7 @@ private:
     RT_TASK th_startCamera;
     RT_TASK th_stopCamera;
     RT_TASK th_calibrationArena;
+    RT_TASK th_robotPosition;
     
     /**********************************************************************/
     /* Mutex                                                              */
@@ -98,7 +107,9 @@ private:
     RT_MUTEX mutex_move;
     RT_MUTEX mutex_camera;
     RT_MUTEX mutex_arena;
-    RT_MUTEX mutex_positionOn;
+    RT_MUTEX mutex_currentImage;
+    RT_MUTEX mutex_validArene;
+    RT_MUTEX mutex_positionRobotEnabled;
 
     /**********************************************************************/
     /* Semaphores                                                         */
@@ -112,6 +123,8 @@ private:
     RT_SEM sem_calibTheThunderdome; //for when the calibration is needed
     RT_SEM sem_choosingArena; //for the selection of the arena
     RT_SEM sem_fluxOn; //for stopping camera flux
+    RT_SEM sem_positionRobotOn; //for displaying the robot position
+    RT_SEM sem_positionTreatment;
 
     /**********************************************************************/
     /* Message queues                                                     */
