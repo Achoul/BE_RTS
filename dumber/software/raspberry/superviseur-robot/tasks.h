@@ -97,6 +97,7 @@ private:
     RT_TASK th_stopCamera;
     RT_TASK th_calibrationArena;
     RT_TASK th_robotPosition;
+    RT_TASK th_connexionToRobotLost;
     
     /**********************************************************************/
     /* Mutex                                                              */
@@ -125,6 +126,7 @@ private:
     RT_SEM sem_fluxOn; //for stopping camera flux
     RT_SEM sem_positionRobotOn; //for displaying the robot position
     RT_SEM sem_positionTreatment;
+    RT_SEM sem_computePos;
 
     /**********************************************************************/
     /* Message queues                                                     */
@@ -188,6 +190,7 @@ private:
     void StopCameraTask();
     void CalibrationArenaTask();
     void RobotPositionTask();
+    void ConnexionToRobotLostTask();
 
 };
 

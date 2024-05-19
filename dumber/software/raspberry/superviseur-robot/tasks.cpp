@@ -19,7 +19,7 @@
 #include <stdexcept>
 
 // Déclaration des priorités des taches
-#define PRIORITY_TSERVER 40
+#define PRIORITY_TSERVER 43
 #define PRIORITY_TOPENCOMROBOT 39
 #define PRIORITY_TMOVE 32
 #define PRIORITY_TSENDTOMON 38
@@ -32,6 +32,7 @@
 #define PRIORITY_TBATTERY 20
 #define PRIORITY_TCALIBARENA 33
 #define PRIORITY_TROBOTPOSITION 27
+#define PRIORITY_TCONNEXIONTOROBOTLOST 41
 
 /*
  * Some remarks:
@@ -145,6 +146,10 @@ void Tasks::Init() {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+    if (err = rt_sem_create(&sem_computePos, NULL, 0, S_FIFO)) {
+        cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
     cout << "Semaphores created successfully" << endl << flush;
 
     /**************************************************************************************/
@@ -195,6 +200,10 @@ void Tasks::Init() {
         exit(EXIT_FAILURE);
     }
     if (err = rt_task_create(&th_robotPosition, "th_robotPosition", 0, PRIORITY_TROBOTPOSITION, 0)) {
+        cerr << "Error task create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_task_create(&th_connexionToRobotLost, "th_connexionToRobotLost", 0, PRIORITY_TROBOTPOSITION, 0)) {
         cerr << "Error task create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -263,6 +272,10 @@ void Tasks::Run() {
         exit(EXIT_FAILURE);
     }
     if (err = rt_task_start(&th_robotPosition, (void(*)(void*)) & Tasks::RobotPositionTask, this)) {
+        cerr << "Error task start: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_task_start(&th_connexionToRobotLost, (void(*)(void*)) & Tasks::ConnexionToRobotLostTask, this)) {
         cerr << "Error task start: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -665,6 +678,7 @@ void Tasks::SendImageTask(){
             rt_mutex_release(&mutex_positionRobotEnabled);
             
             if(positionEnabled_dummy){
+                rt_sem_v(&sem_computePos);
                 rt_sem_p(&sem_positionTreatment,TM_INFINITE); //attend que la tâche qui dessine la position ai finie
             }
             
@@ -802,15 +816,14 @@ void Tasks::RobotPositionTask(){
     struct_arena_t struct_arena_dummy;
     camera_struct_t camera_struct_dummy;
     MessagePosition * Msg2Send;
+    Position position_dummy;
     
-    rt_task_set_periodic(NULL, TM_NOW, 100000000);
     
     
     while(1){
         
-        rt_task_wait_period(NULL);
         rt_sem_p(&sem_positionRobotOn, TM_INFINITE);
-        rt_sem_p(&sem_fluxOn, TM_INFINITE);
+        rt_sem_p(&sem_computePos, TM_INFINITE);
         cout << "Drawing robots" <<endl << flush;
         
         rt_mutex_acquire(&mutex_arena, TM_INFINITE);
@@ -833,7 +846,7 @@ void Tasks::RobotPositionTask(){
             
                 if(!(robotList.empty())){
                     rt_mutex_acquire(&mutex_currentImage, TM_INFINITE);
-                    int robotNum = currentImage->DrawRobots(robotList);
+                    int robotNum = currentImage->DrawAllRobots(robotList);
                     cout << "drawing"<<endl << flush;
                     rt_mutex_release(&mutex_currentImage);
                     
@@ -844,7 +857,15 @@ void Tasks::RobotPositionTask(){
                     
                 }
                 else{
+                    position_dummy.angle = 0.0;
+                    position_dummy.robotId = -1;
+                    position_dummy.center.x = 0.0;
+                    position_dummy.direction.x = 0.0;
+                    position_dummy.center.y = 0.0;
+                    position_dummy.direction.y = 0.0;
                     cout << "No robot in sight"<<endl << flush;
+                    Msg2Send = new MessagePosition(MESSAGE_CAM_POSITION, robotList.front());
+                    WriteInQueue(&q_messageToMon, Msg2Send); 
                 }
             
                 rt_sem_v(&sem_positionTreatment);
@@ -853,10 +874,53 @@ void Tasks::RobotPositionTask(){
         else{
             
         }
-        rt_sem_v(&sem_fluxOn);
         rt_sem_v(&sem_positionRobotOn);
         
     }
 
+}
+
+void Tasks::ConnexionToRobotLostTask(){
+    cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
+    // Synchronization barrier (waiting that all tasks are starting)
+    rt_sem_p(&sem_barrier, TM_INFINITE);
+    
+    int pingSuccess;
+    int unsuccessCounter = 0;
+    int rs;
+    Message * answer;
+    
+    rt_task_set_periodic(NULL, TM_NOW, 1000000000); //1s period
+    
+    while(1){
+        rt_task_wait_period(NULL); 
+        rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
+        rs = robotStarted;
+        rt_mutex_release(&mutex_robotStarted);
+        
+        if(rs ==1){
+            
+            rt_mutex_acquire(&mutex_robot, TM_INFINITE);
+            answer = robot.Write(new Message(MESSAGE_ROBOT_PING)); //envoie un ping au robot
+            rt_mutex_release(&mutex_robot);
+            
+            if (!(answer->CompareID(MESSAGE_ANSWER_ACK))){
+                unsuccessCounter++; //on incrémente le compteur d'erreur
+                cout << "connection lost "<< unsuccessCounter << " times in a row"<<endl << flush;
+            }
+            else{
+                unsuccessCounter = 0;
+                cout << "connection good "<<endl << flush;
+            }
+            
+            if(unsuccessCounter >= 3){
+                WriteInQueue(&q_messageToMon, new Message(MESSAGE_MONITOR_LOST));
+                rt_sem_v(&sem_openComRobot);
+            }
+            
+        }
+        
+    }
+    
 }
 
