@@ -19,20 +19,20 @@
 #include <stdexcept>
 
 // Déclaration des priorités des taches
-#define PRIORITY_TSERVER 43
-#define PRIORITY_TOPENCOMROBOT 39
-#define PRIORITY_TMOVE 32
-#define PRIORITY_TSENDTOMON 38
-#define PRIORITY_TRECEIVEFROMMON 37
+#define PRIORITY_TSERVER 1
+#define PRIORITY_TOPENCOMROBOT 3
+#define PRIORITY_TMOVE 8
+#define PRIORITY_TSENDTOMON 5
+#define PRIORITY_TRECEIVEFROMMON 4
 
-#define PRIORITY_TSTARTROBOT 30
-#define PRIORITY_TSTARTCAMERA 36
-#define PRIORITY_TSENDIMAGE 28
-#define PRIORITY_TSTOPCAMERA 31
-#define PRIORITY_TBATTERY 20
-#define PRIORITY_TCALIBARENA 33
-#define PRIORITY_TROBOTPOSITION 27
-#define PRIORITY_TCONNEXIONTOROBOTLOST 41
+#define PRIORITY_TSTARTROBOT 10
+#define PRIORITY_TSTARTCAMERA 6
+#define PRIORITY_TSENDIMAGE 11
+#define PRIORITY_TSTOPCAMERA 9
+#define PRIORITY_TBATTERY 13
+#define PRIORITY_TCALIBARENA 7
+#define PRIORITY_TROBOTPOSITION 6
+#define PRIORITY_TCONNEXIONTOROBOTLOST 2
 
 /*
  * Some remarks:
@@ -471,8 +471,8 @@ void Tasks::StartRobotTask(void *arg) {
     while (1) {
 
         Message * msgSend;
-        rt_sem_p(&sem_startRobot, TM_INFINITE);
-        cout << "Start robot without watchdog (";
+        rt_sem_p(&sem_startRobot, TM_INFINITE); //for the 7 constraints just release this semaphore in task "connection to supervisor".
+        cout << "Start robot without watchdog ("; 
         rt_mutex_acquire(&mutex_robot, TM_INFINITE);
         msgSend = robot.Write(robot.StartWithoutWD());
         rt_mutex_release(&mutex_robot);
@@ -604,7 +604,7 @@ void Tasks::StartCameraTask(){
     
     while(1){
         rt_sem_p(&sem_startCamera,TM_INFINITE);
-        cout << "Starting my big bad camera";
+        cout << "Starting da camera";
         cout << endl;
         
         rt_mutex_acquire(&mutex_camera, TM_INFINITE);
@@ -615,7 +615,7 @@ void Tasks::StartCameraTask(){
         
         if (status == 0) {
             message_open_camera = new Message(MESSAGE_ANSWER_NACK);
-            cout << "Go fuck yourself with your motherfucking camera";
+            cout << "Your camera is not lauched, you failed";
         } else {
             message_open_camera = new Message(MESSAGE_ANSWER_ACK);
             rt_sem_v(&sem_fluxOn);
@@ -679,8 +679,10 @@ void Tasks::SendImageTask(){
             
             if(positionEnabled_dummy){
                 rt_sem_v(&sem_computePos);
-                rt_sem_p(&sem_positionTreatment,TM_INFINITE); //attend que la tâche qui dessine la position ai finie
+                rt_sem_p(&sem_positionTreatment,TM_INFINITE); //attend que la tâche qui dessine la position est finie
+                cout << "drawing position finished" << endl << flush; 
             }
+            
             
 
             rt_mutex_acquire(&mutex_currentImage, TM_INFINITE);
@@ -847,8 +849,9 @@ void Tasks::RobotPositionTask(){
                 if(!(robotList.empty())){
                     rt_mutex_acquire(&mutex_currentImage, TM_INFINITE);
                     int robotNum = currentImage->DrawAllRobots(robotList);
-                    cout << "drawing"<<endl << flush;
                     rt_mutex_release(&mutex_currentImage);
+                    cout << "drawing"<<endl << flush;
+                    
                     
                     cout << "Number of robots drawn : " << robotNum <<endl << flush;
                     
@@ -857,23 +860,17 @@ void Tasks::RobotPositionTask(){
                     
                 }
                 else{
-                    position_dummy.angle = 0.0;
-                    position_dummy.robotId = -1;
-                    position_dummy.center.x = 0.0;
-                    position_dummy.direction.x = 0.0;
-                    position_dummy.center.y = 0.0;
-                    position_dummy.direction.y = 0.0;
                     cout << "No robot in sight"<<endl << flush;
-                    Msg2Send = new MessagePosition(MESSAGE_CAM_POSITION, robotList.front());
+                    Msg2Send = new MessagePosition(MESSAGE_CAM_POSITION, position_dummy);
                     WriteInQueue(&q_messageToMon, Msg2Send); 
                 }
             
-                rt_sem_v(&sem_positionTreatment);
             
         }
         else{
             
         }
+        rt_sem_v(&sem_positionTreatment);
         rt_sem_v(&sem_positionRobotOn);
         
     }
@@ -914,7 +911,7 @@ void Tasks::ConnexionToRobotLostTask(){
             }
             
             if(unsuccessCounter >= 3){
-                WriteInQueue(&q_messageToMon, new Message(MESSAGE_MONITOR_LOST));
+                WriteInQueue(&q_messageToMon, new Message(MESSAGE_ANSWER_ROBOT_ERROR));
                 rt_sem_v(&sem_openComRobot);
             }
             
