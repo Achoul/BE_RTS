@@ -574,22 +574,22 @@ void Tasks::BatteryTask(){
     rt_sem_p(&sem_barrier, TM_INFINITE);
    
 
-    rt_task_set_periodic(NULL, TM_NOW, 500000000);
+    rt_task_set_periodic(NULL, TM_NOW, 500000000); //set la périodicité
     
     while (1) {
-        rt_task_wait_period(NULL);
+        rt_task_wait_period(NULL);// attend la période avant de ce mettre en marche.
         cout << "Periodic battery update";
         
         rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
-        rs = robotStarted;
+        rs = robotStarted; //dummy pour récupérer le flag "robotStarted"
         rt_mutex_release(&mutex_robotStarted);
         
         if (rs == 1) {        
             rt_mutex_acquire(&mutex_robot, TM_INFINITE);
-            message_batt = (MessageBattery *)robot.Write(new Message(MESSAGE_ROBOT_BATTERY_GET));
+            message_batt = (MessageBattery *)robot.Write(new Message(MESSAGE_ROBOT_BATTERY_GET)); //envoie d'un message battery.  au robot
             rt_mutex_release(&mutex_robot);
 
-            WriteInQueue(&q_messageToMon, message_batt);        }
+            WriteInQueue(&q_messageToMon, message_batt); //récupération du message plus envoie au moniteur       }
         cout << endl << flush;
     }
 }
@@ -608,17 +608,23 @@ void Tasks::StartCameraTask(){
         cout << endl;
         
         rt_mutex_acquire(&mutex_camera, TM_INFINITE);
-        int status = camera_struct.camera.Open();
-        camera_struct.cameraEnabled=true;
+        int status = camera_struct.camera.Open(); //récupère le status de la camera
         rt_mutex_release(&mutex_camera);  
        
         
         if (status == 0) {
-            message_open_camera = new Message(MESSAGE_ANSWER_NACK);
+            message_open_camera = new Message(MESSAGE_ANSWER_NACK); //la camera n'a pas pu être ouverte
+            rt_mutex_acquire(&mutex_camera, TM_INFINITE);
+            camera_struct.cameraEnabled=false; //met le flag de la camera à 0, comme ça les autres tâches savent qu'elle n'est pas valide
+            rt_mutex_release(&mutex_camera);  
             cout << "Your camera is not lauched, you failed";
         } else {
             message_open_camera = new Message(MESSAGE_ANSWER_ACK);
             rt_sem_v(&sem_fluxOn);
+
+            rt_mutex_acquire(&mutex_camera, TM_INFINITE);
+            camera_struct.cameraEnabled=true; //met le flag de la camera à 1, comme ça les autres tâches savent qu'elle est valide
+            rt_mutex_release(&mutex_camera);  
             
             cout << "The camera has been open successfully man";
         }
@@ -644,49 +650,54 @@ void Tasks::SendImageTask(){
     
     
     while (1) {
-        rt_sem_p(&sem_fluxOn,TM_INFINITE);
+        rt_sem_p(&sem_fluxOn,TM_INFINITE); //e sémaphore sert à exclure les autres tâches qui ont besoin du flux vidéo. (à savoir stop camera)
  
         rt_task_wait_period(NULL); 
         
         
         rt_mutex_acquire(&mutex_camera, TM_INFINITE);
-        cameraOn = camera_struct.cameraEnabled;
+        cameraOn = camera_struct.cameraEnabled; //dummy pour récuperer le flag cameraEnable
         rt_mutex_release(&mutex_camera);
         
-        if(cameraOn){
-            rt_mutex_acquire(&mutex_currentImage, TM_INFINITE); //attention c'est risque
-            currentImage = new Img(camera_struct.camera.Grab());
+        if(cameraOn){ //c'est la que le flag est utile ;)
+            rt_mutex_acquire(&mutex_currentImage, TM_INFINITE);
+            currentImage = new Img(camera_struct.camera.Grab()); //on récupère une image que l'on met dans la variable protégé, currentImage
             rt_mutex_release(&mutex_currentImage);    
         }
 
         
-        if(cameraOn){
+        if(cameraOn){//et ici aussi
             rt_mutex_acquire(&mutex_arena, TM_INFINITE);
-            if(struct_arena.areneOK){
+            if(struct_arena.areneOK){ //traitement de l'arène
+                //si l'arène à été choisie alors on la dessine sur chaque image
                 rt_mutex_acquire(&mutex_currentImage, TM_INFINITE);
                 currentImage->DrawArena(struct_arena.thunderdome);
                 rt_mutex_release(&mutex_currentImage);
                 cout << "drawing arena" << endl << flush;
             }
             else{
+                //bon sinon on fait rien quoi, pas d'arène pas de dessin.
                cout << "not drawing arena" << endl << flush; 
             }
             rt_mutex_release(&mutex_arena);
             
             rt_mutex_acquire(&mutex_positionRobotEnabled, TM_INFINITE);
-            positionEnabled_dummy = positionRobotEnabled;
+            positionEnabled_dummy = positionRobotEnabled;//dummy pour le flag de position du robot
             rt_mutex_release(&mutex_positionRobotEnabled);
             
-            if(positionEnabled_dummy){
-                rt_sem_v(&sem_computePos);
+            if(positionEnabled_dummy){ //nouvelle approche pour faire varier les plaisirs, on traite la position dans une tâche séparée. La raison : pour voir si c'est possible
+                rt_sem_v(&sem_computePos); //permet à la tâche "RobotPositionTask" de ce lancer
                 rt_sem_p(&sem_positionTreatment,TM_INFINITE); //attend que la tâche qui dessine la position est finie
+
+                //par ailleur on a une erreur avec cette tâche, en effet l'image n'est plus envoyé par la suite et on a un débordement mémoire. Cependant le code à fonctionner à un moment.
+                //nous n'avons pas réussit à garder cette architecture et réparer ce bug.
                 cout << "drawing position finished" << endl << flush; 
             }
             
             
 
             rt_mutex_acquire(&mutex_currentImage, TM_INFINITE);
-            message_image = new MessageImg(MESSAGE_CAM_IMAGE, currentImage);
+            message_image = new MessageImg(MESSAGE_CAM_IMAGE, currentImage); //envoie de l'image au terminal
             rt_mutex_release(&mutex_currentImage);
 
 
@@ -710,15 +721,15 @@ void Tasks::StopCameraTask(){
     
     while(1){
         
-        rt_sem_p(&sem_stopCamera,TM_INFINITE);
+        rt_sem_p(&sem_stopCamera,TM_INFINITE); //semaphore pour lancer la tâche
         
-        rt_sem_p(&sem_fluxOn, TM_INFINITE);
+        rt_sem_p(&sem_fluxOn, TM_INFINITE); //sémaphore pour "prendre" le flux
         
         cout << "Stoping my big bad camera";
         cout << endl;
         
         rt_mutex_acquire(&mutex_camera, TM_INFINITE);
-        camera_struct.camera.Close();
+        camera_struct.camera.Close();       //bon la on ferme la camera, etc, trivial.
         camera_struct.cameraEnabled=false;
         rt_mutex_release(&mutex_camera);  
         
@@ -726,17 +737,17 @@ void Tasks::StopCameraTask(){
     }
 }
 
-void Tasks::CalibrationArenaTask(){
+void Tasks::CalibrationArenaTask(){ //tâche de calibration arène
     cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
     // Synchronization barrier (waiting that all tasks are starting)
     rt_sem_p(&sem_barrier, TM_INFINITE);
     
     //struct_arena * struct_arena_ptr;
-    Arena * ArenaFinded;
-    Img * imageArene;
-    MessageImg * message_image;
-    Message * Msg;
-    bool validArene_dummy;
+    Arena * ArenaFinded; //dummy arène 
+    Img * imageArene;    //image sur laquelle on va faire la calibration
+    MessageImg * message_image; //message pour envoyer l'image au moniteur pour 
+    Message * Msg; //message 
+    bool validArene_dummy; //
     
     while(1){
         
@@ -757,9 +768,9 @@ void Tasks::CalibrationArenaTask(){
         
         cout << "arene cherché" << endl;
         //Si pas d'arene, instancie l'arene
-        if(ArenaFinded->IsEmpty()){
+        if(ArenaFinded->IsEmpty()){ // gère le cas ou le soft ne trouve pas d'arène
             cout << "Arena not finded" << endl;
-            Msg = new Message(MESSAGE_ANSWER_NACK);
+            Msg = new Message(MESSAGE_ANSWER_NACK); 
             WriteInQueue(&q_messageToMon, Msg);
             
             rt_mutex_acquire(&mutex_arena, TM_INFINITE);
@@ -770,25 +781,21 @@ void Tasks::CalibrationArenaTask(){
         }
         else{
             cout << "Arena finded" << endl;
-            //dessine l'arene pour l'utilisateur
-            imageArene->DrawArena(*ArenaFinded);
-            message_image = new MessageImg(MESSAGE_CAM_IMAGE, imageArene);
+            imageArene->DrawArena(*ArenaFinded);  //dessine l'arene pour l'utilisateur
+            message_image = new MessageImg(MESSAGE_CAM_IMAGE, imageArene); //dessine l'image avec l'arène sur le moniteur
             WriteInQueue(&q_messageToMon, message_image);
         
             rt_sem_p(&sem_choosingArena, TM_INFINITE); // attend le choix de l'arene
             
             rt_mutex_acquire(&mutex_validArene, TM_INFINITE);
-            validArene_dummy = validArene;
+            validArene_dummy = validArene;  //récupère la valuer de validArene
             rt_mutex_release(&mutex_validArene);
             
             if(validArene_dummy){
                 cout << "Arena validated" << endl << flush;
-                rt_mutex_acquire(&mutex_arena, TM_INFINITE);
-                struct_arena.thunderdome = *ArenaFinded;
-                rt_mutex_release(&mutex_arena);
-                
-                rt_mutex_acquire(&mutex_arena, TM_INFINITE);
-                struct_arena.areneOK = true;
+                rt_mutex_acquire(&mutex_arena, TM_INFINITE); 
+                struct_arena.thunderdome = *ArenaFinded; //arène valider, donc on "l'enregistre"
+                struct_arena.areneOK = true;     //flag a true
                 rt_mutex_release(&mutex_arena);
 
             }
@@ -796,7 +803,7 @@ void Tasks::CalibrationArenaTask(){
                 cout << "Arena not validated" << endl << flush;
                 
                 rt_mutex_acquire(&mutex_arena, TM_INFINITE);
-                struct_arena.areneOK = false;
+                struct_arena.areneOK = false; //arène non trouvé => on ne change pas la valeur protégé de l'arène, et on met le flg à false
                 rt_mutex_release(&mutex_arena);
             }
         }  
@@ -824,8 +831,8 @@ void Tasks::RobotPositionTask(){
     
     while(1){
         
-        rt_sem_p(&sem_positionRobotOn, TM_INFINITE);
-        rt_sem_p(&sem_computePos, TM_INFINITE);
+        rt_sem_p(&sem_positionRobotOn, TM_INFINITE); // pour gérer si la position est ON
+        rt_sem_p(&sem_computePos, TM_INFINITE); //Attente de la synchronisation avec send Image
         cout << "Drawing robots" <<endl << flush;
         
         rt_mutex_acquire(&mutex_arena, TM_INFINITE);
@@ -843,25 +850,25 @@ void Tasks::RobotPositionTask(){
         
         if(positionEnabled_dummy && camera_struct_dummy.cameraEnabled){ //on si la position des robots est enabled
             rt_mutex_acquire(&mutex_currentImage, TM_INFINITE);
-            robotList = currentImage->SearchRobot(struct_arena_dummy.thunderdome);
+            robotList = currentImage->SearchRobot(struct_arena_dummy.thunderdome); //renvoie la liste des robot présent avec leur position respective
             rt_mutex_release(&mutex_currentImage);
             
                 if(!(robotList.empty())){
                     rt_mutex_acquire(&mutex_currentImage, TM_INFINITE);
-                    int robotNum = currentImage->DrawAllRobots(robotList);
+                    int robotNum = currentImage->DrawAllRobots(robotList); //dessine tous les robots et renvoie le nombre de robots qu'il a dessiné pour du debug
                     rt_mutex_release(&mutex_currentImage);
                     cout << "drawing"<<endl << flush;
                     
                     
                     cout << "Number of robots drawn : " << robotNum <<endl << flush;
                     
-                        Msg2Send = new MessagePosition(MESSAGE_CAM_POSITION, robotList.front());
+                        Msg2Send = new MessagePosition(MESSAGE_CAM_POSITION, robotList.front()); //écrit la position dans le moniteur
                         WriteInQueue(&q_messageToMon, Msg2Send);   
                     
                 }
                 else{
                     cout << "No robot in sight"<<endl << flush;
-                    Msg2Send = new MessagePosition(MESSAGE_CAM_POSITION, position_dummy);
+                    Msg2Send = new MessagePosition(MESSAGE_CAM_POSITION, position_dummy); // ecrit la position par défaut dans le moniteur (voir classe position)
                     WriteInQueue(&q_messageToMon, Msg2Send); 
                 }
             
@@ -870,8 +877,8 @@ void Tasks::RobotPositionTask(){
         else{
             
         }
-        rt_sem_v(&sem_positionTreatment);
-        rt_sem_v(&sem_positionRobotOn);
+        rt_sem_v(&sem_positionTreatment); //active ce sémaphore pour synchroniser la fin du traitement avec sendImageTask
+        rt_sem_v(&sem_positionRobotOn); //rend le sémaphore positionRobotON, pour qu'il puisse être récupérer soit pas cette tâche, soit par la tâche qui gère les message si on veux arrêter l'envoie de la position
         
     }
 

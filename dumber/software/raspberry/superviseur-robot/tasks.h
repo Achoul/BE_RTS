@@ -71,16 +71,17 @@ private:
         bool cameraEnabled = false; //for task draw on picture
     }camera_struct;
     
-    Img * currentImage;
+    Img * currentImage; //image courrante (par période de sendImage), permet le traitement de la même image par plusieur tâche avant envoie au moniteur, moyénant synchronisation.
     
-    struct struct_arena_t{
-        Arena thunderdome;
-        bool areneOK = false; //bool pour arène valide et existante
+    struct struct_arena_t{ //structure contenant et l'arène et un flag
+        Arena thunderdome; //nom de l'arène
+        bool areneOK = false; //bool pour arène valide et existante (pour les tâches qui ne sont pas calibarene)
     }struct_arena;
-    int robotStarted = 0;
-    int move = MESSAGE_ROBOT_STOP;
-    bool validArene = false;
-    bool positionRobotEnabled;
+
+    int robotStarted = 0; //flag pour savoir si le robot est en branle
+    bool validArene = false; //prend la valeur de la réponse de l'utilisateur (arène choisie ou non) != areneOK 
+    //validArene fait un peu doublon avec areneOK, à optimiser.
+    bool positionRobotEnabled; //flag pour signaler que la position est active ou non.
     
     /**********************************************************************/
     /* Tasks                                                              */
@@ -91,13 +92,13 @@ private:
     RT_TASK th_openComRobot;
     RT_TASK th_startRobot;
     RT_TASK th_move;
-    RT_TASK th_battery;
-    RT_TASK th_sendImage;
-    RT_TASK th_startCamera;
-    RT_TASK th_stopCamera;
-    RT_TASK th_calibrationArena;
-    RT_TASK th_robotPosition;
-    RT_TASK th_connexionToRobotLost;
+    RT_TASK th_battery; //s'occupe de tranmettre périodiquement le niveau de la batterie (T=500ms)
+    RT_TASK th_sendImage; //s'occupe de tranmettre périodiquement le flux video au moniteur (T=100ms) + dessin de l'arène
+    RT_TASK th_startCamera; //démarre la camera
+    RT_TASK th_stopCamera; //arrête la camera
+    RT_TASK th_calibrationArena; //calibre l'arène
+    RT_TASK th_robotPosition; //calcule la position du robot
+    RT_TASK th_connexionToRobotLost; //gère la perte de connexion avec le robot
     
     /**********************************************************************/
     /* Mutex                                                              */
@@ -111,6 +112,7 @@ private:
     RT_MUTEX mutex_currentImage;
     RT_MUTEX mutex_validArene;
     RT_MUTEX mutex_positionRobotEnabled;
+    //protège respectivement ce qu'il y a dans leur nom
 
     /**********************************************************************/
     /* Semaphores                                                         */
@@ -119,14 +121,15 @@ private:
     RT_SEM sem_openComRobot;
     RT_SEM sem_serverOk;
     RT_SEM sem_startRobot;
-    RT_SEM sem_startCamera; //added
+    RT_SEM sem_startCamera; //added for when the camera needs to be started
     RT_SEM sem_stopCamera; //added for when the camera is stoped
     RT_SEM sem_calibTheThunderdome; //for when the calibration is needed
     RT_SEM sem_choosingArena; //for the selection of the arena
     RT_SEM sem_fluxOn; //for stopping camera flux
     RT_SEM sem_positionRobotOn; //for displaying the robot position
-    RT_SEM sem_positionTreatment;
-    RT_SEM sem_computePos;
+    RT_SEM sem_positionTreatment; //for attente de la fin du traitement de l'image dans robot position
+    RT_SEM sem_computePos; //for rentrer dans le code qui dessine la position
+    //petit mélange anglais-français pour faire varié les plaisirs
 
     /**********************************************************************/
     /* Message queues                                                     */
